@@ -303,15 +303,13 @@ public class ZipArchiveInputStream extends ArchiveInputStream implements InputSt
         final int extraLen = ZipShort.getValue(lfhBuf, off);
         off += SHORT; // NOSONAR - assignment as documentation
 
-        final byte[] fileName = new byte[fileNameLen];
-        readFully(fileName);
+        final byte[] fileName = readRange(fileNameLen);
         current.entry.setName(entryEncoding.decode(fileName), fileName);
         if (hasUTF8Flag) {
             current.entry.setNameSource(ZipArchiveEntry.NameSource.NAME_WITH_EFS_FLAG);
         }
 
-        final byte[] extraData = new byte[extraLen];
-        readFully(extraData);
+        final byte[] extraData = readRange(extraLen);
         current.entry.setExtra(extraData);
 
         if (!hasUTF8Flag && useUnicodeExtraFields) {
@@ -802,6 +800,15 @@ public class ZipArchiveInputStream extends ArchiveInputStream implements InputSt
         if (count < len) {
             throw new EOFException();
         }
+    }
+
+    private byte[] readRange(final int len) throws IOException {
+        final byte[] ret = IOUtils.readRange(in, len);
+        count(ret.length);
+        if (ret.length < len) {
+            throw new EOFException();
+        }
+        return ret;
     }
 
     private void readDataDescriptor() throws IOException {

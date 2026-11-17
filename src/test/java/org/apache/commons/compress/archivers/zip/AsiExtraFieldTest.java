@@ -20,6 +20,9 @@ package org.apache.commons.compress.archivers.zip;
 
 import static org.junit.Assert.*;
 
+import java.util.zip.CRC32;
+import java.util.zip.ZipException;
+
 import org.junit.Test;
 
 /**
@@ -137,6 +140,66 @@ public class AsiExtraFieldTest implements UnixStat {
             fail("should raise bad CRC exception");
         } catch (final Exception e) {
             assertEquals("bad CRC checksum 0 instead of ebf018e",
+                         e.getMessage());
+        }
+    }
+
+    @Test
+    public void testParseRejectsHugeLinkLength() {
+        // link length close to Integer.MAX_VALUE would make the parser
+        // allocate a ~2GB array before noticing there is no such data
+        assertBadLinkLength(new byte[] {(byte) 0xF0, (byte) 0xFF, (byte) 0xFF, 0x7F}, 0x7FFFFFF0);
+    }
+
+    @Test
+    public void testParseRejectsNegativeLinkLength() {
+        assertBadLinkLength(new byte[] {(byte) 0xFF, (byte) 0xFF, (byte) 0xFF, (byte) 0xFF}, -1);
+    }
+
+    @Test
+    public void testParseRejectsLinkLengthBiggerThanData() {
+        assertBadLinkLength(new byte[] {5, 0, 0, 0}, 5);
+    }
+
+    @Test
+    public void testZipArchiveEntrySetExtraRejectsHugeLinkLength() {
+        final byte[] payload = createAsiPayload(new byte[] {(byte) 0xF0, (byte) 0xFF, (byte) 0xFF, 0x7F});
+        final byte[] extra = new byte[4 + payload.length];
+        System.arraycopy(new ZipShort(0x756E).getBytes(), 0, extra, 0, 2);
+        System.arraycopy(new ZipShort(payload.length).getBytes(), 0, extra, 2, 2);
+        System.arraycopy(payload, 0, extra, 4, payload.length);
+        final ZipArchiveEntry entry = new ZipArchiveEntry("test");
+        try {
+            entry.setExtra(extra);
+            fail("should raise exception for bad link length");
+        } catch (final RuntimeException e) {
+            assertTrue(e.getCause() instanceof ZipException);
+            assertTrue(e.getMessage(), e.getMessage().contains("Bad symbolic link name length"));
+        }
+    }
+
+    private static byte[] createAsiPayload(final byte[] linkLength) {
+        final byte[] content = new byte[] {0123, (byte) 0x80,                       // mode
+                                           linkLength[0], linkLength[1],
+                                           linkLength[2], linkLength[3],             // link length
+                                           5, 0, 6, 0,                               // uid, gid
+                                           (byte) 't', (byte) 'e', (byte) 's', (byte) 't'};
+        final CRC32 crc = new CRC32();
+        crc.update(content);
+        final byte[] data = new byte[4 + content.length];
+        System.arraycopy(ZipLong.getBytes(crc.getValue()), 0, data, 0, 4);
+        System.arraycopy(content, 0, data, 4, content.length);
+        return data;
+    }
+
+    private static void assertBadLinkLength(final byte[] linkLength, final int expectedLength) {
+        final byte[] data = createAsiPayload(linkLength);
+        final AsiExtraField a = new AsiExtraField();
+        try {
+            a.parseFromLocalFileData(data, 0, data.length);
+            fail("should raise exception for bad link length");
+        } catch (final ZipException e) {
+            assertEquals("Bad symbolic link name length " + expectedLength + " in ASI extra field",
                          e.getMessage());
         }
     }

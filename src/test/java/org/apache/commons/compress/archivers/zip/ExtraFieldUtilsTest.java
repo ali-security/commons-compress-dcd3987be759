@@ -117,7 +117,7 @@ public class ExtraFieldUtilsTest implements UnixStat {
             fail("data should be invalid");
         } catch (final ZipException e) {
             assertEquals("message",
-                         "Failed to parse corrupt ZIP extra field of type 756e",
+                         "Bad symbolic link name length 67108867 in ASI extra field",
                          e.getMessage());
         }
     }

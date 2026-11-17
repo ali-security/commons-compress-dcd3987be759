@@ -710,8 +710,10 @@ public class ZipFile implements Closeable {
         ze.setExternalAttributes(ZipLong.getValue(cfhBuf, off));
         off += WORD;
 
-        final byte[] fileName = new byte[fileNameLen];
-        IOUtils.readFully(archive, ByteBuffer.wrap(fileName));
+        final byte[] fileName = IOUtils.readRange(archive, fileNameLen);
+        if (fileName.length < fileNameLen) {
+            throw new EOFException();
+        }
         ze.setName(entryEncoding.decode(fileName), fileName);
 
         // LFH offset,
@@ -719,14 +721,18 @@ public class ZipFile implements Closeable {
         // data offset will be filled later
         entries.add(ze);
 
-        final byte[] cdExtraData = new byte[extraLen];
-        IOUtils.readFully(archive, ByteBuffer.wrap(cdExtraData));
+        final byte[] cdExtraData = IOUtils.readRange(archive, extraLen);
+        if (cdExtraData.length < extraLen) {
+            throw new EOFException();
+        }
         ze.setCentralDirectoryExtra(cdExtraData);
 
         setSizesAndOffsetFromZip64Extra(ze, diskStart);
 
-        final byte[] comment = new byte[commentLen];
-        IOUtils.readFully(archive, ByteBuffer.wrap(comment));
+        final byte[] comment = IOUtils.readRange(archive, commentLen);
+        if (comment.length < commentLen) {
+            throw new EOFException();
+        }
         ze.setComment(entryEncoding.decode(comment));
 
         if (!hasUTF8Flag && useUnicodeExtraFields) {
@@ -1055,8 +1061,10 @@ public class ZipFile implements Closeable {
             wordBbuf.get(shortBuf);
             final int extraFieldLen = ZipShort.getValue(shortBuf);
             skipBytes(fileNameLen);
-            final byte[] localExtraData = new byte[extraFieldLen];
-            IOUtils.readFully(archive, ByteBuffer.wrap(localExtraData));
+            final byte[] localExtraData = IOUtils.readRange(archive, extraFieldLen);
+            if (localExtraData.length < extraFieldLen) {
+                throw new EOFException();
+            }
             ze.setExtra(localExtraData);
             ze.setDataOffset(offset + LFH_OFFSET_FOR_FILENAME_LENGTH
                 + SHORT + SHORT + fileNameLen + extraFieldLen);
