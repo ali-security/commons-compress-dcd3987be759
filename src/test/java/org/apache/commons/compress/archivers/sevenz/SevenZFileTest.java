@@ -20,15 +20,19 @@ package org.apache.commons.compress.archivers.sevenz;
 import static org.junit.Assert.*;
 
 import java.io.ByteArrayOutputStream;
+import java.io.EOFException;
 import java.io.File;
 import java.io.FileInputStream;
 import java.io.IOException;
+import java.nio.ByteBuffer;
+import java.nio.ByteOrder;
 import java.security.NoSuchAlgorithmException;
 import java.util.Arrays;
 import java.util.HashMap;
 import java.util.Iterator;
 import java.util.Map;
 import java.util.Random;
+import java.util.zip.CRC32;
 
 import javax.crypto.Cipher;
 
@@ -337,6 +341,190 @@ public class SevenZFileTest extends AbstractTestCase {
             }
             assertEquals("Hello, world!\n", new String(contents, "UTF-8"));
             assertNull(sevenZFile.getNextEntry());
+        }
+    }
+
+    @Test
+    public void rejectsNextHeaderSizeBeyondArchiveSize() throws Exception {
+        final byte[] header = new byte[] { NID.kHeader, NID.kEnd };
+        assertCorruptedArchiveRejected(create7zArchive(0, Integer.MAX_VALUE - 8, header),
+            "nextHeaderSize is out of bounds");
+    }
+
+    @Test
+    public void rejectsNextHeaderOffsetBeyondArchiveSize() throws Exception {
+        final byte[] header = new byte[] { NID.kHeader, NID.kEnd };
+        assertCorruptedArchiveRejected(create7zArchive(1L << 40, header.length, header),
+            "nextHeaderOffset is out of bounds");
+    }
+
+    @Test
+    public void rejectsHugeArchivePropertySize() throws Exception {
+        final ByteArrayOutputStream header = new ByteArrayOutputStream();
+        header.write(NID.kHeader);
+        header.write(NID.kArchiveProperties);
+        header.write(0x18);
+        writeUint64(header, Integer.MAX_VALUE);
+        header.write(new byte[] { 0, 0, 0, 0 });
+        assertCorruptedArchiveRejected(header.toByteArray(), "invalid property size");
+    }
+
+    @Test
+    public void rejectsHugeNumberOfPackStreams() throws Exception {
+        final ByteArrayOutputStream header = new ByteArrayOutputStream();
+        header.write(NID.kHeader);
+        header.write(NID.kMainStreamsInfo);
+        header.write(NID.kPackInfo);
+        writeUint64(header, 0); // packPos
+        writeUint64(header, Integer.MAX_VALUE); // numPackStreams
+        header.write(NID.kSize);
+        writeUint64(header, 0x100000); // packSize
+        header.write(new byte[] { 0, 0, 0, 0 });
+        assertCorruptedArchiveRejected(header.toByteArray(), "packSize (1048576) is out of range");
+    }
+
+    @Test
+    public void rejectsHugeNumberOfFolders() throws Exception {
+        final ByteArrayOutputStream header = new ByteArrayOutputStream();
+        header.write(NID.kHeader);
+        header.write(NID.kMainStreamsInfo);
+        header.write(NID.kUnpackInfo);
+        header.write(NID.kFolder);
+        writeUint64(header, Integer.MAX_VALUE); // numFolders
+        header.write(0); // external
+        writeUint64(header, 0); // numCoders of first folder
+        header.write(new byte[] { 0, 0, 0, 0 });
+        assertCorruptedArchiveRejected(header.toByteArray(), "Folder without coders");
+    }
+
+    @Test
+    public void rejectsHugeNumberOfCoders() throws Exception {
+        assertCorruptedArchiveRejected(folderWithCoderProperties(Integer.MAX_VALUE),
+            "invalid propertiesSize in folder");
+    }
+
+    @Test
+    public void rejectsHugeCoderPropertiesSize() throws Exception {
+        assertCorruptedArchiveRejected(folderWithCoderProperties(1),
+            "invalid propertiesSize in folder");
+    }
+
+    @Test
+    public void rejectsHugeNumberOfBindPairs() throws Exception {
+        final ByteArrayOutputStream header = new ByteArrayOutputStream();
+        header.write(NID.kHeader);
+        header.write(NID.kMainStreamsInfo);
+        header.write(NID.kUnpackInfo);
+        header.write(NID.kFolder);
+        writeUint64(header, 1); // numFolders
+        header.write(0); // external
+        writeUint64(header, 1); // numCoders
+        header.write(0x11); // complex coder with an id of one byte
+        header.write(0); // coder id
+        writeUint64(header, 1); // numInStreams
+        writeUint64(header, Integer.MAX_VALUE); // numOutStreams
+        header.write(new byte[] { 0, 0, 0, 0 });
+        assertCorruptedArchiveRejected(header.toByteArray(),
+            "Total input streams can't be less than the number of bind pairs");
+    }
+
+    @Test
+    public void rejectsHugeNumberOfFiles() throws Exception {
+        final ByteArrayOutputStream header = new ByteArrayOutputStream();
+        header.write(NID.kHeader);
+        header.write(NID.kFilesInfo);
+        writeUint64(header, Integer.MAX_VALUE); // numFiles
+        header.write(0); // end of properties
+        header.write(NID.kEnd);
+        assertCorruptedArchiveRejected(header.toByteArray(), "archive with entries but no folders");
+    }
+
+    @Test
+    public void rejectsHugeFileNamesSize() throws Exception {
+        final ByteArrayOutputStream header = new ByteArrayOutputStream();
+        header.write(NID.kHeader);
+        header.write(NID.kFilesInfo);
+        writeUint64(header, 1); // numFiles
+        header.write(NID.kName);
+        writeUint64(header, Integer.MAX_VALUE); // size of names property
+        header.write(0); // external
+        header.write(new byte[] { 'a', 0, 0, 0 });
+        try (SevenZFile sevenZFile = new SevenZFile(
+                create7zArchive(0, header.size(), header.toByteArray()))) {
+            fail("Expected an EOFException");
+        } catch (final EOFException expected) {
+            // expected, the names are truncated
+        }
+    }
+
+    private static byte[] folderWithCoderProperties(final int numCoders) throws IOException {
+        final ByteArrayOutputStream header = new ByteArrayOutputStream();
+        header.write(NID.kHeader);
+        header.write(NID.kMainStreamsInfo);
+        header.write(NID.kUnpackInfo);
+        header.write(NID.kFolder);
+        writeUint64(header, 1); // numFolders
+        header.write(0); // external
+        writeUint64(header, numCoders);
+        header.write(0x21); // simple coder with attributes and an id of one byte
+        header.write(0); // coder id
+        writeUint64(header, Integer.MAX_VALUE); // propertiesSize
+        header.write(new byte[] { 0, 0, 0, 0 });
+        return header.toByteArray();
+    }
+
+    private static void assertCorruptedArchiveRejected(final byte[] header, final String expectedMessage)
+        throws IOException {
+        assertCorruptedArchiveRejected(create7zArchive(0, header.length, header), expectedMessage);
+    }
+
+    private static void assertCorruptedArchiveRejected(final SeekableInMemoryByteChannel archive,
+        final String expectedMessage) throws IOException {
+        try (SevenZFile sevenZFile = new SevenZFile(archive)) {
+            fail("Expected an IOException with message " + expectedMessage);
+        } catch (final IOException ex) {
+            assertEquals(expectedMessage, ex.getMessage());
+        }
+    }
+
+    private static SeekableInMemoryByteChannel create7zArchive(final long nextHeaderOffset,
+        final long nextHeaderSize, final byte[] header) {
+        final CRC32 crc = new CRC32();
+        crc.update(header);
+        final ByteBuffer startHeader = ByteBuffer.allocate(20).order(ByteOrder.LITTLE_ENDIAN);
+        startHeader.putLong(nextHeaderOffset);
+        startHeader.putLong(nextHeaderSize);
+        startHeader.putInt((int) crc.getValue());
+        crc.reset();
+        crc.update(startHeader.array());
+
+        final ByteBuffer archive = ByteBuffer.allocate(SevenZFile.SIGNATURE_HEADER_SIZE + header.length)
+            .order(ByteOrder.LITTLE_ENDIAN);
+        archive.put(SevenZFile.sevenZSignature);
+        archive.put((byte) 0);
+        archive.put((byte) 4);
+        archive.putInt((int) crc.getValue());
+        archive.put(startHeader.array());
+        archive.put(header);
+        return new SeekableInMemoryByteChannel(archive.array());
+    }
+
+    private static void writeUint64(final ByteArrayOutputStream header, long value) {
+        int firstByte = 0;
+        int mask = 0x80;
+        int i;
+        for (i = 0; i < 8; i++) {
+            if (value < ((1L << ( 7  * (i + 1))))) {
+                firstByte |= (value >>> (8 * i));
+                break;
+            }
+            firstByte |= mask;
+            mask >>>= 1;
+        }
+        header.write(firstByte);
+        for (; i > 0; i--) {
+            header.write((int) (0xff & value));
+            value >>>= 8;
         }
     }
 
