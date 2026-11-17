@@ -457,6 +457,38 @@ public class SevenZFileTest extends AbstractTestCase {
         }
     }
 
+    @Test(timeout = 30000)
+    public void rejectsFolderUsingSameCoderMoreThanOnce() throws Exception {
+        final ByteArrayOutputStream header = new ByteArrayOutputStream();
+        header.write(NID.kEncodedHeader);
+        header.write(NID.kPackInfo);
+        writeUint64(header, 0); // packPos
+        writeUint64(header, 1); // numPackStreams
+        header.write(NID.kSize);
+        writeUint64(header, 0); // packSize
+        header.write(NID.kEnd);
+        header.write(NID.kUnpackInfo);
+        header.write(NID.kFolder);
+        writeUint64(header, 1); // numFolders
+        header.write(0); // external
+        writeUint64(header, 1); // numCoders
+        header.write(0x11); // complex coder with an id of one byte
+        header.write(0); // coder id
+        writeUint64(header, 3); // numInStreams
+        writeUint64(header, 2); // numOutStreams
+        writeUint64(header, 0); // bind pair inIndex
+        writeUint64(header, 0); // bind pair outIndex - coder 0 feeds itself
+        writeUint64(header, 0); // first packed stream
+        writeUint64(header, 1); // second packed stream
+        header.write(NID.kCodersUnpackSize);
+        writeUint64(header, 0);
+        writeUint64(header, 0);
+        header.write(NID.kEnd); // end of UnpackInfo
+        header.write(NID.kEnd); // end of StreamsInfo
+        assertCorruptedArchiveRejected(header.toByteArray(),
+            "folder uses the same coder more than once in coder chain");
+    }
+
     private static byte[] folderWithCoderProperties(final int numCoders) throws IOException {
         final ByteArrayOutputStream header = new ByteArrayOutputStream();
         header.write(NID.kHeader);

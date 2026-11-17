@@ -18,9 +18,12 @@
  */
 package org.apache.commons.compress.archivers.sevenz;
 
+import java.io.IOException;
+
 import org.junit.Test;
 
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.fail;
 
 
 /**
@@ -82,6 +85,51 @@ public class FolderTest {
 
         assertEquals(0, folder.findBindPairForInStream(0));
 
+    }
+
+
+    @Test(timeout = 10000)
+    public void testGetOrderedCodersRejectsCoderBoundToItself() {
+
+        Folder folder = new Folder();
+        folder.coders = new Coder[] { new Coder() };
+        BindPair bindPair = new BindPair();
+        bindPair.inIndex = 0;
+        bindPair.outIndex = 0;
+        folder.bindPairs = new BindPair[] { bindPair };
+        folder.packedStreams = new long[] { 0 };
+
+        assertCoderLoopRejected(folder);
+
+    }
+
+
+    @Test(timeout = 10000)
+    public void testGetOrderedCodersRejectsCoderCycle() {
+
+        Folder folder = new Folder();
+        folder.coders = new Coder[] { new Coder(), new Coder() };
+        BindPair first = new BindPair();
+        first.inIndex = 1;
+        first.outIndex = 0;
+        BindPair second = new BindPair();
+        second.inIndex = 0;
+        second.outIndex = 1;
+        folder.bindPairs = new BindPair[] { first, second };
+        folder.packedStreams = new long[] { 0 };
+
+        assertCoderLoopRejected(folder);
+
+    }
+
+
+    private static void assertCoderLoopRejected(Folder folder) {
+        try {
+            folder.getOrderedCoders();
+            fail("Expected an IOException");
+        } catch (IOException ex) {
+            assertEquals("folder uses the same coder more than once in coder chain", ex.getMessage());
+        }
     }
 
 
