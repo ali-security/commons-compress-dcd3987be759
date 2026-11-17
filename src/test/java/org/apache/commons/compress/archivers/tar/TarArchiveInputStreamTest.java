@@ -109,6 +109,46 @@ public class TarArchiveInputStreamTest {
         tais.close();
     }
 
+    @Test(expected = IOException.class)
+    public void paxHeaderValueLongerThanHeaderSizeIsRejected() throws Exception {
+        final InputStream is = new ByteArrayInputStream(new byte[1]);
+        try (final TarArchiveInputStream tais = new TarArchiveInputStream(is)) {
+            final byte[] header = "2147483000 foo=bar\n".getBytes(CharsetNames.UTF_8);
+            tais.parsePaxHeaders(new ByteArrayInputStream(header), header.length);
+        }
+    }
+
+    @Test
+    public void paxHeaderWithHugeLengthDoesNotAllocateDeclaredSize() throws Exception {
+        final InputStream is = new ByteArrayInputStream(new byte[1]);
+        try (final TarArchiveInputStream tais = new TarArchiveInputStream(is)) {
+            tais.parsePaxHeaders(new ByteArrayInputStream("2147483000 foo=bar\n"
+                                                          .getBytes(CharsetNames.UTF_8)));
+            fail("Expected IOException for truncated PAX header value");
+        } catch (final IOException expected) {
+            // a premature end of the value must be reported without
+            // allocating a buffer of the declared length
+        }
+    }
+
+    @Test
+    public void paxHeaderWithHugeLengthInArchiveIsRejected() throws Exception {
+        final byte[] paxData = "2147483000 foo=bar\n".getBytes(CharsetNames.UTF_8);
+        final TarArchiveEntry paxEntry = new TarArchiveEntry("./PaxHeaders.X/foo",
+            TarConstants.LF_PAX_EXTENDED_HEADER_LC);
+        paxEntry.setSize(paxData.length);
+        final byte[] archive = new byte[4 * TarConstants.DEFAULT_RCDSIZE];
+        paxEntry.writeEntryHeader(archive);
+        System.arraycopy(paxData, 0, archive, TarConstants.DEFAULT_RCDSIZE, paxData.length);
+        // followed by two zero records marking EOF
+        try (final TarArchiveInputStream tais = new TarArchiveInputStream(new ByteArrayInputStream(archive))) {
+            tais.getNextTarEntry();
+            fail("Expected IOException for PAX header value exceeding header size");
+        } catch (final IOException expected) {
+            assertTrue(expected.getMessage().contains("exceeds size of header record"));
+        }
+    }
+
     @Test
     public void workaroundForBrokenTimeHeader() throws Exception {
         TarArchiveInputStream in = null;
