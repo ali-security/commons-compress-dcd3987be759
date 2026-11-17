@@ -28,6 +28,7 @@ import java.io.IOException;
 import java.io.InputStream;
 
 import java.util.Arrays;
+import java.util.BitSet;
 import java.util.Comparator;
 import java.util.HashMap;
 import java.util.Map;
@@ -354,6 +355,9 @@ public class DumpArchiveInputStream extends ArchiveInputStream {
                     i += reclen) {
                 final int ino = DumpArchiveUtil.convert32(blockBuffer, i);
                 reclen = DumpArchiveUtil.convert16(blockBuffer, i + 4);
+                if (reclen == 0) {
+                    throw new DumpArchiveException("reclen cannot be 0");
+                }
 
                 final byte type = blockBuffer[i + 6];
 
@@ -411,11 +415,13 @@ public class DumpArchiveInputStream extends ArchiveInputStream {
      *
      * @param entry
      * @return  full path for specified archive entry, or null if there's a gap.
+     * @throws DumpArchiveException Infinite loop detected in directory entries.
      */
-    private String getPath(final DumpArchiveEntry entry) {
+    private String getPath(final DumpArchiveEntry entry) throws DumpArchiveException {
         // build the stack of elements. It's possible that we're
         // still missing an intermediate value and if so we
         final Stack<String> elements = new Stack<>();
+        final BitSet visited = new BitSet();
         Dirent dirent = null;
 
         for (int i = entry.getIno();; i = dirent.getParentIno()) {
@@ -424,7 +430,12 @@ public class DumpArchiveInputStream extends ArchiveInputStream {
                 break;
             }
 
+            if (visited.get(i)) {
+                throw new DumpArchiveException("Duplicate node " + i);
+            }
+
             dirent = names.get(i);
+            visited.set(i);
             elements.push(dirent.getName());
 
             if (dirent.getIno() == dirent.getParentIno()) {
